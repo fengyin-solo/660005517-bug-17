@@ -102,25 +102,35 @@ def run_backtest(config: GridConfig):
         equity = cash + holdings * p
         equity_curve.append(round(equity, 2))
 
-    total_profit = cash + holdings * prices[-1] - config.initialCapital
-    return_rate = (total_profit / config.initialCapital) * 100
+    final_equity = equity_curve[-1]
+    # 收益率/总盈亏一律以净值曲线末值为准，保证与曲线同源、不出现口径偏差
+    total_profit = final_equity - config.initialCapital
+    return_rate = (total_profit / config.initialCapital * 100) if config.initialCapital else 0.0
 
-    # Sharpe ratio
-    eq_returns = np.diff(equity_curve) / np.array(equity_curve[:-1] + 1e-5)
-    sharpe = float(np.mean(eq_returns) / max(np.std(eq_returns), 1e-5) * np.sqrt(252)) if len(eq_returns) > 1 else 0
+    # 夏普比率（基于同一份净值序列的逐期收益率）
+    if len(equity_curve) > 1:
+        eq = np.asarray(equity_curve, dtype=float)
+        eq_returns = np.diff(eq) / (np.asarray(eq[:-1]) + 1e-12)
+        std = float(np.std(eq_returns))
+        sharpe = float(np.mean(eq_returns) / std * math.sqrt(252)) if std > 1e-12 else 0.0
+    else:
+        sharpe = 0.0
 
-    # Max drawdown
+    # 最大回撤：按历史峰值滚动计算（而非只对末值）
     peak = equity_curve[0]
     max_dd = 0.0
     for e in equity_curve:
-        if e > peak: peak = e
-        dd = (peak - e) / peak * 100
-        max_dd = max(max_dd, dd)
+        if e > peak:
+            peak = e
+        if peak > 0:
+            dd = (peak - e) / peak * 100
+            max_dd = max(max_dd, dd)
 
-    # Win rate
-    wins = sum(1 for o in orders if o["profit"] > 0)
-    total = len([o for o in orders if o["side"] == "SELL"])
-    win_rate = (wins / total * 100) if total > 0 else 0
+    # 胜率 / 成交笔数：只统计已平仓（SELL）成交，买入挂单不计入笔数
+    closed_orders = [o for o in orders if o["side"] == "SELL"]
+    closed_trades = len(closed_orders)
+    wins = sum(1 for o in closed_orders if o["profit"] > 0)
+    win_rate = (wins / closed_trades * 100) if closed_trades > 0 else 0.0
 
     return {
         "orders": orders,
@@ -129,6 +139,7 @@ def run_backtest(config: GridConfig):
         "sharpeRatio": round(sharpe, 2),
         "maxDrawdown": round(max_dd, 2),
         "winRate": round(win_rate, 1),
+        "closedTrades": closed_trades,
         "equityCurve": equity_curve
     }
 

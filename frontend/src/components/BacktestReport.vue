@@ -5,12 +5,33 @@
       <div class="metric">
         <div class="m-val" :class="store.gridResult.totalProfit>=0?'profit':'loss'">¥{{ store.gridResult.totalProfit.toFixed(0) }}</div>
         <div class="m-label">总盈亏</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.gridResult.totalProfit - store.prevResult.totalProfit, true)">{{ fmtDelta(store.gridResult.totalProfit - store.prevResult.totalProfit, '¥', 0) }}</div>
       </div>
-      <div class="metric"><div class="m-val" :class="store.gridResult.returnRate>=0?'profit':'loss'">{{ store.gridResult.returnRate.toFixed(2) }}%</div><div class="m-label">收益率</div></div>
-      <div class="metric"><div class="m-val">{{ store.gridResult.sharpeRatio.toFixed(2) }}</div><div class="m-label">夏普比率</div></div>
-      <div class="metric"><div class="m-val loss">{{ store.gridResult.maxDrawdown.toFixed(2) }}%</div><div class="m-label">最大回撤</div></div>
-      <div class="metric"><div class="m-val">{{ store.gridResult.winRate.toFixed(1) }}%</div><div class="m-label">胜率</div></div>
-      <div class="metric"><div class="m-val">{{ store.gridResult.orders.filter(o=>o.side==='SELL').length }}</div><div class="m-label">成交笔数</div></div>
+      <div class="metric">
+        <div class="m-val" :class="store.gridResult.returnRate>=0?'profit':'loss'">{{ store.gridResult.returnRate.toFixed(2) }}%</div>
+        <div class="m-label">收益率</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.gridResult.returnRate - store.prevResult.returnRate, true)">{{ fmtDelta(store.gridResult.returnRate - store.prevResult.returnRate, '%', 2) }}</div>
+      </div>
+      <div class="metric">
+        <div class="m-val">{{ store.gridResult.sharpeRatio.toFixed(2) }}</div>
+        <div class="m-label">夏普比率</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.gridResult.sharpeRatio - store.prevResult.sharpeRatio, true)">{{ fmtDelta(store.gridResult.sharpeRatio - store.prevResult.sharpeRatio, '', 2) }}</div>
+      </div>
+      <div class="metric">
+        <div class="m-val loss">{{ store.gridResult.maxDrawdown.toFixed(2) }}%</div>
+        <div class="m-label">最大回撤</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.prevResult.maxDrawdown - store.gridResult.maxDrawdown, true)">{{ fmtDelta(store.prevResult.maxDrawdown - store.gridResult.maxDrawdown, '%', 2) }}</div>
+      </div>
+      <div class="metric">
+        <div class="m-val">{{ store.gridResult.winRate.toFixed(1) }}%</div>
+        <div class="m-label">胜率</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.gridResult.winRate - store.prevResult.winRate, true)">{{ fmtDelta(store.gridResult.winRate - store.prevResult.winRate, '%', 1) }}</div>
+      </div>
+      <div class="metric">
+        <div class="m-val">{{ store.gridResult.closedTrades }}</div>
+        <div class="m-label">成交笔数</div>
+        <div class="m-delta" v-if="store.prevResult" :class="deltaClass(store.gridResult.closedTrades - store.prevResult.closedTrades, true)">{{ fmtDelta(store.gridResult.closedTrades - store.prevResult.closedTrades, '', 0) }}</div>
+      </div>
     </div>
     <div ref="eqChart" class="chart"></div>
     <div class="order-list" v-if="store.gridResult.orders.length">
@@ -22,29 +43,53 @@
         <span class="o-profit" :class="o.profit>=0?'profit':'loss'" v-if="o.side==='SELL'">+¥{{ o.profit.toFixed(2) }}</span>
       </div>
     </div>
+    <div class="order-list" v-else>
+      <div class="section-title">暂无成交</div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { useTradingStore } from '../store/trading'
 const store = useTradingStore(); const eqChart = ref<HTMLDivElement>(); let inst: echarts.ECharts|null=null
 
-function updateEq() {
-  if (!inst||!store.gridResult) return
-  const eq = store.gridResult.equityCurve
-  inst.setOption({
+function chartOption(eq: number[]) {
+  return {
     backgroundColor:'transparent',grid:{left:45,right:10,top:5,bottom:20},
     xAxis:{type:'category',data:eq.map((_,i)=>i),show:false},
     yAxis:{type:'value',axisLabel:{color:'#94a3b8',fontSize:9}},
     series:[{type:'line',data:eq,symbol:'none',lineStyle:{color:'#4fc3f7',width:1},
       areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(79,195,247,0.2)'},{offset:1,color:'rgba(79,195,247,0)'}])}
     }],animation:false
-  })
+  }
 }
-watch(()=>store.gridResult,(r)=>{if(r) setTimeout(updateEq,50)})
-onUnmounted(()=>inst?.dispose())
+
+function updateEq() {
+  if (!store.gridResult || !eqChart.value) return
+  // v-if 会在重跑间隙销毁容器，容器被替换后需要重新 init
+  if (!inst || inst.isDisposed() || inst.getDom() !== eqChart.value) {
+    inst?.dispose()
+    inst = echarts.init(eqChart.value)
+  }
+  // notMerge: true，切换参数后彻底替换上一轮的曲线数据
+  inst.setOption(chartOption(store.gridResult.equityCurve), true)
+}
+
+function fmtDelta(d: number, unit: string, digits: number) {
+  const v = d.toFixed(digits)
+  return (d > 0 ? '▲ +' : d < 0 ? '▼ ' : '— ') + v + unit
+}
+function deltaClass(d: number, higherBetter: boolean) {
+  if (d === 0) return 'flat'
+  const positive = d > 0
+  return positive === higherBetter ? 'better' : 'worse'
+}
+
+onMounted(() => nextTick(updateEq))
+watch(() => store.gridResult, (r) => { if (r) nextTick(updateEq) })
+onUnmounted(() => inst?.dispose())
 </script>
 
 <style scoped>
@@ -54,6 +99,8 @@ onUnmounted(()=>inst?.dispose())
 .metric{text-align:center;padding:8px;background:#0a0e27;border-radius:6px}
 .m-val{font-size:18px;font-weight:700}.m-val.profit{color:#22c55e}.m-val.loss{color:#ef4444}
 .m-label{font-size:10px;color:#64748b;margin-top:2px}
+.m-delta{font-size:9px;margin-top:2px;line-height:1}
+.m-delta.better{color:#22c55e}.m-delta.worse{color:#ef4444}.m-delta.flat{color:#64748b}
 .chart{width:100%;height:120px;margin-top:8px}
 .order-row{display:flex;gap:8px;padding:3px 6px;font-size:11px;border-radius:3px;margin:1px 0}
 .order-row.BUY{background:#22c55e15}.order-row.SELL{background:#ef444415}
