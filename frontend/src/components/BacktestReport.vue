@@ -10,12 +10,12 @@
       <div class="metric"><div class="m-val">{{ store.gridResult.sharpeRatio.toFixed(2) }}</div><div class="m-label">夏普比率</div></div>
       <div class="metric"><div class="m-val loss">{{ store.gridResult.maxDrawdown.toFixed(2) }}%</div><div class="m-label">最大回撤</div></div>
       <div class="metric"><div class="m-val">{{ store.gridResult.winRate.toFixed(1) }}%</div><div class="m-label">胜率</div></div>
-      <div class="metric"><div class="m-val">{{ store.gridResult.orders.filter(o=>o.side==='SELL').length }}</div><div class="m-label">成交笔数</div></div>
+      <div class="metric"><div class="m-val">{{ store.gridResult.tradeCount }}</div><div class="m-label">成交笔数</div></div>
     </div>
     <div ref="eqChart" class="chart"></div>
     <div class="order-list" v-if="store.gridResult.orders.length">
       <div class="section-title">最近成交</div>
-      <div v-for="o in store.gridResult.orders.slice(-8).reverse()" :key="o.id" class="order-row" :class="o.side">
+      <div v-for="(o, idx) in store.gridResult.orders.slice(-8).reverse()" :key="store.runId + '-' + idx" class="order-row" :class="o.side">
         <span class="o-side">{{ o.side }}</span>
         <span class="o-price">@¥{{ o.price }}</span>
         <span class="o-qty">{{ o.quantity.toFixed(2) }}</span>
@@ -26,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { useTradingStore } from '../store/trading'
 const store = useTradingStore(); const eqChart = ref<HTMLDivElement>(); let inst: echarts.ECharts|null=null
@@ -34,6 +34,8 @@ const store = useTradingStore(); const eqChart = ref<HTMLDivElement>(); let inst
 function updateEq() {
   if (!inst||!store.gridResult) return
   const eq = store.gridResult.equityCurve
+  // notMerge: replace every run's data wholesale so a shorter new curve
+  // never leaves the previous run's tail points on the chart.
   inst.setOption({
     backgroundColor:'transparent',grid:{left:45,right:10,top:5,bottom:20},
     xAxis:{type:'category',data:eq.map((_,i)=>i),show:false},
@@ -41,10 +43,24 @@ function updateEq() {
     series:[{type:'line',data:eq,symbol:'none',lineStyle:{color:'#4fc3f7',width:1},
       areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(79,195,247,0.2)'},{offset:1,color:'rgba(79,195,247,0)'}])}
     }],animation:false
-  })
+  }, true)
 }
-watch(()=>store.gridResult,(r)=>{if(r) setTimeout(updateEq,50)})
-onUnmounted(()=>inst?.dispose())
+// Panel renders only after the first backtest; init the chart once its DOM exists.
+watch(()=>store.gridResult, async (r)=>{
+  // A rerun replaces gridResult (null in flight): v-if removes the chart DOM,
+  // so the old instance must be disposed or the new panel would stay blank.
+  if (!r) {
+    inst?.dispose()
+    inst = null
+    return
+  }
+  await nextTick()
+  if (!inst && eqChart.value) inst = echarts.init(eqChart.value)
+  updateEq()
+}, { flush: 'post' })
+onMounted(() => window.addEventListener('resize', resizeChart))
+function resizeChart() { inst?.resize() }
+onUnmounted(()=>{ window.removeEventListener('resize', resizeChart); inst?.dispose(); inst=null })
 </script>
 
 <style scoped>

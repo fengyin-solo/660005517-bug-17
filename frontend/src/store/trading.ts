@@ -7,6 +7,7 @@ export const useTradingStore = defineStore('trading', () => {
   const ticks = ref<Tick[]>([])
   const orderBook = ref<OrderBook | null>(null)
   const gridResult = ref<GridResult | null>(null)
+  const runId = ref(0)
   const wsConnected = ref(false)
   const config = ref<GridConfig>({ lowerPrice: 95, upperPrice: 115, gridCount: 20, capitalPerGrid: 1000, initialCapital: 100000 })
 
@@ -26,11 +27,23 @@ export const useTradingStore = defineStore('trading', () => {
 
   async function runBacktest() {
     loading.value = true
-    try { const { data } = await axios.post('/api/backtest', config.value) ; gridResult.value = data }
-    finally { loading.value = false }
+    // Clear the previous run up front so the panel can never show stale stats
+    // for the new parameters while the request is in flight or fails.
+    gridResult.value = null
+    try {
+      const { data } = await axios.post('/api/backtest', config.value)
+      // Single atomic assignment: stats panel, chart and order list are all
+      // derived from this one object and therefore always stay in sync.
+      gridResult.value = data
+      runId.value += 1
+    } catch (e) {
+      console.error('回测请求失败:', e)
+    } finally {
+      loading.value = false
+    }
   }
 
   function disconnectWS() { ws?.close(); ws = null; wsConnected.value = false }
 
-  return { loading, ticks, orderBook, gridResult, wsConnected, config, connectWS, runBacktest, disconnectWS }
+  return { loading, ticks, orderBook, gridResult, runId, wsConnected, config, connectWS, runBacktest, disconnectWS }
 })
